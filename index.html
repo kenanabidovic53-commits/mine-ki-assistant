@@ -7,78 +7,84 @@
   <title>Mein KI-Assistent</title>
   <link rel="manifest" href="manifest.webmanifest">
   <style>
-    :root { font-family: system-ui,-apple-system,sans-serif; color-scheme: dark; }
-    body { margin:0; background:#0b1020; color:#f8fafc; min-height:100vh; display:grid; place-items:center; }
-    main { width:min(92vw,520px); background:#111827; border:1px solid #263244; border-radius:24px; padding:24px; box-sizing:border-box; }
-    h1 { margin:0 0 8px; font-size:1.7rem; }
-    .status { margin:18px 0; padding:14px; border-radius:14px; background:#182235; }
-    button { width:100%; border:0; border-radius:14px; padding:15px; font-size:1rem; font-weight:700; margin:7px 0; }
-    #toggle { background:#22c55e; color:#07110a; }
-    #listen { background:#e5e7eb; color:#111827; }
-    textarea { width:100%; min-height:110px; box-sizing:border-box; border-radius:14px; border:1px solid #334155; background:#0f172a; color:#fff; padding:12px; margin-top:10px; resize:vertical; }
-    small { color:#94a3b8; display:block; margin-top:12px; line-height:1.4; }
+    body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:#f4f6f8;color:#111827}
+    main{max-width:720px;margin:auto;padding:24px}
+    .card{background:#fff;border-radius:18px;padding:20px;margin:16px 0;box-shadow:0 6px 22px #00000012}
+    button{font:inherit;padding:12px 16px;border:0;border-radius:12px;margin:5px;cursor:pointer}
+    .primary{background:#111827;color:white}.muted{background:#e5e7eb}
+    #log{white-space:pre-wrap;min-height:90px}.status{font-weight:700}
   </style>
 </head>
 <body>
 <main>
   <h1>Mein KI-Assistent</h1>
-  <div class="status" id="status">🎙️ Aktiv – bereit für Sprachbefehle</div>
-  <button id="toggle">🔇 Stumm schalten</button>
-  <button id="listen">🎤 Jetzt zuhören</button>
-  <textarea id="notes" placeholder="Notizen / erkannte Sprachbefehle …"></textarea>
-  <small>Stumm-/Aktiv-Status und Notizen werden nur lokal auf diesem Gerät gespeichert.</small>
+  <div class="card">
+    <div id="status" class="status">🎙️ Aktiv – bereit für Sprachbefehle</div>
+    <p id="prompt">Sag z. B. „Notiz: Milch kaufen“, „Erinnerung: morgen Müll rausbringen“ oder „Zusammenfassen: …“</p>
+    <button id="mute" class="muted">🔇 Stumm schalten</button>
+    <button id="listen" class="primary">🎤 Jetzt zuhören</button>
+  </div>
+  <div class="card">
+    <h2>Notizen / erkannte Sprachbefehle</h2>
+    <div id="log">Noch keine Einträge.</div>
+  </div>
 </main>
 <script>
-const statusEl = document.querySelector('#status');
-const toggle = document.querySelector('#toggle');
-const listen = document.querySelector('#listen');
-const notes = document.querySelector('#notes');
-
-let muted = localStorage.getItem('assistantMuted') === 'true';
-notes.value = localStorage.getItem('assistantNotes') || '';
-
-function render() {
-  statusEl.textContent = muted ? '🔇 Stumm – hört nicht zu' : '🎙️ Aktiv – bereit für Sprachbefehle';
-  toggle.textContent = muted ? '🎙️ Aktivieren' : '🔇 Stumm schalten';
-  listen.disabled = muted;
-  listen.style.opacity = muted ? '.45' : '1';
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let muted=false, pending=null;
+const statusEl=document.querySelector('#status'), promptEl=document.querySelector('#prompt'), logEl=document.querySelector('#log');
+const say=t=>{ if('speechSynthesis' in window){ speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(t)); }};
+const log=t=>{ logEl.textContent=(logEl.textContent==='Noch keine Einträge.'?'':logEl.textContent+'\n')+t; };
+function confirmPending(text){
+  const yes=/^(ja|jep|jawohl|passt|okay|ok)\b/i.test(text.trim());
+  const no=/^(nein|nee|abbrechen|stopp)\b/i.test(text.trim());
+  if(yes){
+    if(pending.type==='note'){ localStorage.setItem('notes',JSON.stringify([...(JSON.parse(localStorage.getItem('notes')||'[]')),pending.text])); log('✅ Notiz gespeichert: '+pending.text); say('Gespeichert.'); }
+    if(pending.type==='reminder'){ localStorage.setItem('reminders',JSON.stringify([...(JSON.parse(localStorage.getItem('reminders')||'[]')),pending.text])); log('✅ Erinnerung vorgemerkt: '+pending.text); say('Erinnerung vorgemerkt.'); }
+    if(pending.type==='summary'){ log('✅ Zusammenfassung bestätigt: '+pending.text); say('Alles klar.'); }
+    pending=null; promptEl.textContent='Bereit für den nächsten Befehl.'; return true;
+  }
+  if(no){ log('❌ Vorgang abgebrochen.'); pending=null; promptEl.textContent='Bereit für den nächsten Befehl.'; say('Abgebrochen.'); return true; }
+  say('Bitte antworte mit Ja oder Nein.'); return true;
 }
-toggle.onclick = () => {
-  muted = !muted;
-  localStorage.setItem('assistantMuted', muted);
-  render();
+function handle(text){
+  log('🗣️ '+text);
+  if(pending) return confirmPending(text);
+  let m;
+  if((m=text.match(/^notiz[:\s]+(.+)/i))){
+    pending={type:'note',text:m[1].trim()};
+    promptEl.textContent='Notiz erkannt: „'+pending.text+'“ – speichern?';
+    say('Ich habe verstanden: '+pending.text+'. Soll ich das speichern? Antworte mit Ja oder Nein.');
+  } else if((m=text.match(/^erinnerung[:\s]+(.+)/i))){
+    pending={type:'reminder',text:m[1].trim()};
+    promptEl.textContent='Erinnerung erkannt: „'+pending.text+'“ – wirklich vormerken?';
+    say('Ich habe verstanden: '+pending.text+'. Soll ich dich daran wirklich erinnern? Antworte mit Ja oder Nein.');
+  } else if((m=text.match(/^zusammenfassen[:\s]+(.+)/i))){
+    pending={type:'summary',text:m[1].trim()};
+    promptEl.textContent='Verstanden: „'+pending.text+'“ – passt das so?';
+    say('Ich habe verstanden: '+pending.text+'. Passt das so? Antworte mit Ja oder Nein.');
+  } else {
+    say('Diesen Befehl kenne ich noch nicht.');
+    promptEl.textContent='Noch unbekannter Befehl. Nutze Notiz, Erinnerung oder Zusammenfassen.';
+  }
+}
+document.querySelector('#mute').onclick=()=>{
+  muted=!muted;
+  statusEl.textContent=muted?'🔇 Stumm – hört nicht zu':'🎙️ Aktiv – bereit für Sprachbefehle';
+  document.querySelector('#listen').disabled=muted;
+  document.querySelector('#mute').textContent=muted?'🎙️ Aktivieren':'🔇 Stumm schalten';
 };
-notes.addEventListener('input', () => localStorage.setItem('assistantNotes', notes.value));
-
-const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-if (!SpeechRecognition) {
-  listen.textContent = 'Spracherkennung hier nicht verfügbar';
-  listen.disabled = true;
-} else {
-  const recognition = new SpeechRecognition();
-  recognition.lang = 'de-DE';
-  recognition.interimResults = false;
-  recognition.continuous = false;
-
-  listen.onclick = () => {
-    if (muted) return;
-    statusEl.textContent = '🎧 Ich höre zu …';
-    recognition.start();
-  };
-  recognition.onresult = (event) => {
-    const text = event.results[0][0].transcript;
-    notes.value += (notes.value ? '\n' : '') + text;
-    localStorage.setItem('assistantNotes', notes.value);
-    statusEl.textContent = '✅ Sprachbefehl erkannt';
-  };
-  recognition.onerror = () => { statusEl.textContent = '⚠️ Spracherkennung konnte nicht gestartet werden'; };
-  recognition.onend = () => setTimeout(render, 900);
-}
-render();
-
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./service-worker.js');
-}
+document.querySelector('#listen').onclick=()=>{
+  if(muted)return;
+  if(!SR){ alert('Die Spracherkennung wird in diesem Browser nicht unterstützt.'); return; }
+  const r=new SR(); r.lang='de-DE'; r.interimResults=false; r.maxAlternatives=1;
+  statusEl.textContent='👂 Ich höre zu …';
+  r.onresult=e=>handle(e.results[0][0].transcript);
+  r.onerror=e=>{ statusEl.textContent='⚠️ Sprachfehler: '+e.error; };
+  r.onend=()=>{ if(!muted) statusEl.textContent='🎙️ Aktiv – bereit für Sprachbefehle'; };
+  r.start();
+};
+if('serviceWorker' in navigator) navigator.serviceWorker.register('./service-worker.js');
 </script>
 </body>
 </html>
